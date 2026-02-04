@@ -37,7 +37,7 @@
 - Key-based authentication recommended.
 
 ## 🛠️ CLI Tools Management
-- **cvc**: Clash management tool. Linked from `/home/qizhao/.local/bin/cvc`.
+- **cvc**: Clash management tool (Python script). Stored in `qzserver/cli/cvc`.
 
 ---
-*Last Updated: 2026年 02月 05日 星期四 00:10:31 CST*
+*Last Updated: $(date)*

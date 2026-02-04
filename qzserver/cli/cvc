@@ -1,1 +1,258 @@
-/home/qizhao/.local/bin/cvc
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import argparse
+import os
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+
+# Configuration
+API_SOCKET = "/tmp/verge/verge-mihomo.sock"
+CONFIG_DIR = os.path.expanduser("~/.local/share/io.github.clash-verge-rev.clash-verge-rev")
+PROFILES_YAML = os.path.join(CONFIG_DIR, "profiles.yaml")
+
+def get_secret():
+    try:
+        with open(os.path.join(CONFIG_DIR, "clash-verge.yaml"), 'r') as f:
+            for line in f:
+                if line.strip().startswith("secret:"):
+                    return line.split(":", 1)[1].strip().strip("'").strip('"')
+    except:
+        pass
+    return "set-your-secret"
+
+SECRET = get_secret()
+
+def call_api(method, path, data=None):
+    cmd = ["curl", "-s", "-X", method, f"http://localhost{path}", 
+           "-H", f"Authorization: Bearer {SECRET}",
+           "--unix-socket", API_SOCKET]
+    if data:
+        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(data)]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    if not result.stdout:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"response": result.stdout}
+
+def cmd_status(args):
+    version = call_api("GET", "/version")
+    configs = call_api("GET", "/configs")
+    if not version or not configs:
+        print("Could not connect to Clash core. Is it running?")
+        return
+
+    print(f"Clash Core: {version.get('version')} (Meta: {version.get('meta')})")
+    print(f"Mode: {configs.get('mode')}")
+    print(f"Log Level: {configs.get('log-level')}")
+    tun_status = "Enabled" if configs.get("tun", {}).get("enable") else "Disabled"
+    print(f"TUN Mode: {tun_status}")
+
+def cmd_proxies(args):
+    proxies_data = call_api("GET", "/proxies")
+    if not proxies_data: return
+    groups = proxies_data.get("proxies", {})
+    selector_groups = {k: v for k, v in groups.items() if v.get("type") == "Selector"}
+    
+    if args.list:
+        for name, group in selector_groups.items():
+            print(f"Group: {name}")
+            print(f"  Current: {group.get('now')}")
+    elif args.group:
+        group = selector_groups.get(args.group)
+        if not group:
+            print(f"Group '{args.group}' not found.")
+            return
+        if args.select:
+            quoted_group = urllib.parse.quote(args.group)
+            res = call_api("PUT", f"/proxies/{quoted_group}", {"name": args.select})
+            if res == {}:
+                print(f"Selected '{args.select}' for group '{args.group}'")
+            else:
+                print(f"Error selecting proxy: {res}")
+        else:
+            print(f"Proxies in group '{args.group}':")
+            for p in group.get("all", []):
+                marker = "*" if p == group.get("now") else " "
+                delay = ""
+                p_info = groups.get(p, {})
+                history = p_info.get("history", [])
+                if history:
+                    delay = f"({history[-1].get('delay')}ms)"
+                print(f" {marker} {p} {delay}")
+    else:
+        for name, group in selector_groups.items():
+            print(f"{name}: {group.get('now')}")
+
+def test_single_proxy(proxy_name, url, timeout):
+    quoted_proxy = urllib.parse.quote(proxy_name)
+    quoted_url = urllib.parse.quote(url)
+    res = call_api("GET", f"/proxies/{quoted_proxy}/delay?timeout={timeout}&url={quoted_url}")
+    if res and "delay" in res:
+        return proxy_name, res['delay']
+    return proxy_name, None
+
+def cmd_test(args):
+    proxies_data = call_api("GET", "/proxies")
+    if not proxies_data: return
+    groups = proxies_data.get("proxies", {})
+    
+    if args.all and args.group:
+        group = groups.get(args.group)
+        if not group:
+            print(f"Group '{args.group}' not found.")
+            return
+        proxies_to_test = group.get("all", [])
+        print(f"Testing all {len(proxies_to_test)} nodes in group '{args.group}'...")
+        
+        results = []
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(test_single_proxy, p, args.url, args.timeout) for p in proxies_to_test]
+            for future in futures:
+                results.append(future.result())
+        
+        # Sort by delay (None at the end)
+        results.sort(key=lambda x: (x[1] is None, x[1]))
+        
+        print(f"{'Proxy Name':<40} | {'Delay':<10}")
+        print("-" * 55)
+        for name, delay in results:
+            delay_str = f"{delay}ms" if delay else "Timeout/Error"
+            print(f"{name[:40]:<40} | {delay_str:<10}")
+        return
+
+    target = args.proxy
+    if not target:
+        group_name = args.group
+        if not group_name:
+            system_groups = ["GLOBAL", "DIRECT", "REJECT"]
+            for name, info in groups.items():
+                if info.get("type") == "Selector" and name not in system_groups:
+                    group_name = name
+                    break
+            if not group_name: group_name = "GLOBAL"
+        
+        group = groups.get(group_name)
+        if not group:
+            print(f"Group {group_name} not found.")
+            return
+        target = group.get("now")
+        print(f"Auto-selected current proxy from group '{group_name}': {target}")
+
+    name, delay = test_single_proxy(target, args.url, args.timeout)
+    if delay:
+        print(f"Delay for '{name}': {delay}ms")
+    else:
+        print(f"Test failed for '{name}'")
+
+def cmd_tun(args):
+    enable = args.action == "on"
+    res = call_api("PATCH", "/configs", {"tun": {"enable": enable}})
+    if res == {}:
+        print(f"TUN mode successfully set to {'on' if enable else 'off'}")
+    else:
+        print(f"Failed to set TUN mode: {res}")
+
+def cmd_list(args):
+    print("--- Status ---")
+    cmd_status(args)
+    print("\n--- Active Proxies ---")
+    cmd_proxies(argparse.Namespace(list=False, group=None, select=None))
+
+def cmd_profiles(args):
+    if not os.path.exists(PROFILES_YAML):
+        print("profiles.yaml not found.")
+        return
+    with open(PROFILES_YAML, 'r') as f:
+        lines = f.readlines()
+    
+    profiles = []
+    current_profile = {}
+    in_items = False
+    cur_uid = ""
+    for line in lines:
+        if line.startswith("current:"):
+            cur_uid = line.split(":", 1)[1].strip()
+        if line.startswith("items:"):
+            in_items = True
+            continue
+        if in_items:
+            if line.startswith("- uid:"):
+                if current_profile: profiles.append(current_profile)
+                current_profile = {"uid": line.split(":", 1)[1].strip()}
+            elif line.startswith("    name:") or line.startswith("  name:"):
+                current_profile["name"] = line.split(":", 1)[1].strip().strip('"').strip("'")
+            elif line.startswith("    file:") or line.startswith("  file:"):
+                current_profile["file"] = line.split(":", 1)[1].strip().strip('"').strip("'")
+            elif line.startswith("    url:") or line.startswith("  url:"):
+                current_profile["url"] = line.split(":", 1)[1].strip().strip('"').strip("'")
+    if current_profile: profiles.append(current_profile)
+
+    if args.update:
+        target = next((p for p in profiles if p.get("uid") == args.update or p.get("name") == args.update), None)
+        if not target or "url" not in target:
+            print(f"Profile '{args.update}' not found or has no URL.")
+            return
+        dest = os.path.join(CONFIG_DIR, "profiles", target["file"])
+        print(f"Updating {target.get('name')}...")
+        res = subprocess.run(["curl", "-L", "-o", dest, target["url"]])
+        print("Update successful." if res.returncode == 0 else "Update failed.")
+        return
+
+    for p in profiles:
+        marker = "*" if p.get("uid") == cur_uid else " "
+        name = p.get("name") or p.get("uid")
+        print(f" {marker} {name} ({p.get('uid')})")
+
+def main():
+    parser = argparse.ArgumentParser(description="Clash Verge CLI")
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("status", help="Show Clash status")
+    subparsers.add_parser("list", help="List overview")
+
+    proxy_parser = subparsers.add_parser("proxy", help="Manage proxies")
+    proxy_parser.add_argument("-l", "--list", action="store_true", help="List all groups")
+    proxy_parser.add_argument("-g", "--group", help="Select a group")
+    proxy_parser.add_argument("-s", "--select", help="Select a proxy")
+
+    test_parser = subparsers.add_parser("test", help="Test delay")
+    test_parser.add_argument("proxy", nargs="?", help="Proxy name")
+    test_parser.add_argument("-g", "--group", help="Group name")
+    test_parser.add_argument("-a", "--all", action="store_true", help="Test all proxies in group")
+    test_parser.add_argument("-u", "--url", default="http://www.gstatic.com/generate_204")
+    test_parser.add_argument("-t", "--timeout", type=int, default=5000)
+
+    tun_parser = subparsers.add_parser("tun", help="TUN mode")
+    tun_parser.add_argument("action", choices=["on", "off"])
+
+    profile_parser = subparsers.add_parser("profile", help="Profiles")
+    profile_parser.add_argument("-l", "--list", action="store_true")
+    profile_parser.add_argument("-u", "--update")
+
+    subparsers.add_parser("restart")
+    log_parser = subparsers.add_parser("logs")
+    log_parser.add_argument("-n", type=int, default=20)
+
+    args = parser.parse_args()
+    if args.command == "status": cmd_status(args)
+    elif args.command == "list": cmd_list(args)
+    elif args.command == "proxy": cmd_proxies(args)
+    elif args.command == "test": cmd_test(args)
+    elif args.command == "tun": cmd_tun(args)
+    elif args.command == "profile": cmd_profiles(args)
+    elif args.command == "restart": subprocess.run(["sudo", "systemctl", "restart", "clash-verge-service"])
+    elif args.command == "logs":
+        log_dir = os.path.join(CONFIG_DIR, "logs")
+        log_files = sorted([f for f in os.listdir(log_dir) if f.endswith(".log")], reverse=True)
+        if log_files: subprocess.run(["tail", "-n", str(args.n), os.path.join(log_dir, log_files[0])])
+    else: parser.print_help()
+
+if __name__ == "__main__":
+    main()
