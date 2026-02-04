@@ -1,1 +1,96 @@
-/home/qizhao/.config/starship.toml
+# Starship 配置 - 双行布局
+
+format = """
+$os\
+${custom.project}\
+$directory\
+$git_branch\
+$git_status\
+$nodejs\
+$python\
+$rust\
+$fill\
+${custom.memory}\
+$time\
+$cmd_duration\
+$line_break\
+$character"""
+
+# 自定义模块 1：显示 CloudAscend 标志
+[custom.project]
+command = "echo '󱓞 qzserver'"
+when = "true"
+style = "bg:magenta fg:black"
+format = "[$output]($style) "
+
+# 自定义模块 2：显示当前内存使用率
+[custom.memory]
+command = "free -m | awk '/Mem:/ { printf(\"%d%%\", $3/$2*100) }'"
+when = "true"
+style = "bg:magenta fg:black"
+format = "[ 󰍛 $output ]($style)"
+
+# 时间模块
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:magenta fg:black"
+format = "[  $time ]($style)"
+
+# 填充空白，让右侧模块靠右显示
+[fill]
+symbol = " "
+
+# 提示符图标
+[character]
+success_symbol = "[󰄛](bold fg:magenta) "
+error_symbol = "[󰄛](bold fg:red) "
+vimcmd_symbol = "[󰄛](bold fg:green) "
+vimcmd_replace_one_symbol = "[󰄛](bold fg:yellow) "
+vimcmd_replace_symbol = "[󰄛](bold fg:yellow) "
+vimcmd_visual_symbol = "[󰄛](bold fg:cyan) "
+
+# 目录
+[directory]
+truncation_length = 3
+truncation_symbol = "…/"
+style = "bold fg:cyan"
+
+# Git 分支
+[git_branch]
+symbol = " "
+style = "bold fg:yellow"
+
+# Git 状态
+[git_status]
+format = '([\[$all_status$ahead_behind\]]($style) )'
+style = "bold fg:red"
+
+# Node.js
+[nodejs]
+symbol = " "
+style = "bold fg:green"
+
+# Python
+[python]
+symbol = " "
+style = "bold fg:yellow"
+
+# Rust
+[rust]
+symbol = " "
+style = "bold fg:208"
+
+# 命令执行时间
+[cmd_duration]
+min_time = 500
+format = " 󱎫 [$duration]($style)"
+style = "fg:bright-black"
+
+# 操作系统图标
+[os]
+disabled = false
+format = "[$symbol]($style) "
+
+[os.symbols]
+Arch = "󰣇"
