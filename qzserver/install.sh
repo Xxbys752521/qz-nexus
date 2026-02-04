@@ -30,6 +30,7 @@ mkdir -p ~/.config
 ln -sf "$SCRIPT_DIR/fish" ~/.config/fish
 ln -sf "$SCRIPT_DIR/wezterm" ~/.config/wezterm
 ln -sf "$SCRIPT_DIR/starship.toml" ~/.config/starship.toml
+ln -sf "$SCRIPT_DIR/nvim" ~/.config/nvim
 
 # 4. Apply Headless Server Tweaks (Lid Close)
 echo "🌙 Configuring lid behavior..."
